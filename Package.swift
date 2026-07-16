@@ -16,9 +16,14 @@ let package = Package(
     ),
   ],
   dependencies: [
-    .package(url: "https://github.com/ml-explore/mlx-swift", exact: "0.30.2"),
+    // 0.30.2's iOS NAX kernel silently corrupts large ConvTransposed1d outputs,
+    // which Kokoro exposes as loud static in longer synthesis chunks. 0.30.6
+    // contains the upstream integer-overflow fix (ml-explore/mlx#3092).
+    .package(url: "https://github.com/ml-explore/mlx-swift", exact: "0.30.6"),
     // .package(url: "https://github.com/mlalma/eSpeakNGSwift", from: "1.0.1"),
-    .package(url: "https://github.com/mlalma/MisakiSwift", exact: "1.0.6"),
+    // Controlled fork aligns Misaki's transitive MLX pin with Kokoro's fixed
+    // runtime; upstream 1.0.6 still hard-pins the affected MLX 0.30.2.
+    .package(url: "https://github.com/ahh1539/MisakiSwift", exact: "1.0.7"),
     .package(url: "https://github.com/mlalma/MLXUtilsLibrary.git", exact: "0.0.6")
   ],
   targets: [
