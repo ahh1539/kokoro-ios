@@ -23,7 +23,7 @@ let package = Package(
     // .package(url: "https://github.com/mlalma/eSpeakNGSwift", from: "1.0.1"),
     // Controlled fork aligns Misaki's transitive MLX pin with Kokoro's fixed
     // runtime; upstream 1.0.6 still hard-pins the affected MLX 0.30.2.
-    .package(url: "https://github.com/ahh1539/MisakiSwift", exact: "1.0.7"),
+    .package(url: "https://github.com/ahh1539/MisakiSwift", exact: "1.0.8"),
     .package(url: "https://github.com/mlalma/MLXUtilsLibrary.git", exact: "0.0.6")
   ],
   targets: [
@@ -39,7 +39,7 @@ let package = Package(
         .product(name: "MLXUtilsLibrary", package: "MLXUtilsLibrary")
       ],
       resources: [
-       .copy("../../Resources/")
+       .process("../../Resources")
       ]
     ),
     .testTarget(

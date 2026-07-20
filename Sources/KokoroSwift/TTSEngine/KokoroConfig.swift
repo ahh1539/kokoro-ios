@@ -146,15 +146,15 @@ struct KokoroConfig: Decodable {
     
   /// Loads the configuration from the bundled config.json file.
   ///
-  /// This method reads the configuration file from the module's Resources directory,
+  /// This method reads the configuration file from the module resource bundle,
   /// parses it as JSON, and caches the result for future use.
   ///
   /// - Returns: Parsed KokoroConfig instance
   /// - Note: Uses forced unwrapping (try!) as configuration loading is critical
   ///         and should fail fast if the file is missing or malformed
   nonisolated static func loadConfig() -> KokoroConfig {
-    // Locate config.json in the module bundle
-    let fileURL = Bundle.module.url(forResource: "config", withExtension: "json", subdirectory: "Resources")!
+    // Locate config.json in the module bundle.
+    let fileURL = Bundle.module.url(forResource: "config", withExtension: "json")!
     
     // Read file contents
     let configJSON = try! String(contentsOf: fileURL, encoding: .utf8)

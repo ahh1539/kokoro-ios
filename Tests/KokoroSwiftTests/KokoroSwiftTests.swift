@@ -1,5 +1,7 @@
 import Testing
 @testable import KokoroSwift
 
-@Test func exampleTest() async throws {
+@Test func packageConfigurationLoadsFromModuleBundle() {
+  let config = KokoroConfig.loadConfig()
+  #expect(config.nToken > 0)
 }
