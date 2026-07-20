@@ -39,7 +39,7 @@ let package = Package(
         .product(name: "MLXUtilsLibrary", package: "MLXUtilsLibrary")
       ],
       resources: [
-       .process("../../Resources")
+       .process("Resources")
       ]
     ),
     .testTarget(
