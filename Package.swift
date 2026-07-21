@@ -16,21 +16,15 @@ let package = Package(
     ),
   ],
   dependencies: [
-    // 0.30.2's iOS NAX kernel silently corrupts large ConvTransposed1d outputs,
-    // which Kokoro exposes as loud static in longer synthesis chunks. 0.30.6
-    // contains the upstream integer-overflow fix (ml-explore/mlx#3092).
-    //
-    // Junco fork of 0.30.6: identical mlx runtime except Metal's check_error logs
-    // instead of throwing, so a Metal command-buffer error inside the completion
-    // handler (raised when iOS revokes GPU access on background/lock mid-inference)
-    // no longer aborts the process. Every manifest in this graph must reference the
-    // same fork URL or SPM reports a duplicate mlx-swift package identity.
-    .package(url: "https://github.com/ahh1539/mlx-swift", exact: "0.30.6-junco.1"),
+    // Junco fork of mlx-swift on upstream mlx 0.32.0, which recovers from a Metal
+    // command-buffer error (raised when iOS revokes GPU access on background/lock
+    // mid-inference) instead of hanging or aborting the process. The mlx-c submodule
+    // carries a one-line FFTNorm compat patch for 0.32. Every manifest in this graph
+    // must reference the same fork URL or SPM reports a duplicate package identity.
+    .package(url: "https://github.com/ahh1539/mlx-swift", exact: "0.31.6-junco.0.32.1"),
     // .package(url: "https://github.com/mlalma/eSpeakNGSwift", from: "1.0.1"),
-    // Controlled fork aligns Misaki's transitive MLX pin with Kokoro's fixed
-    // runtime; upstream 1.0.6 still hard-pins the affected MLX 0.30.2.
-    .package(url: "https://github.com/ahh1539/MisakiSwift", exact: "1.0.9"),
-    .package(url: "https://github.com/ahh1539/MLXUtilsLibrary.git", exact: "0.0.6-junco.1")
+    .package(url: "https://github.com/ahh1539/MisakiSwift", exact: "1.0.10"),
+    .package(url: "https://github.com/ahh1539/MLXUtilsLibrary.git", exact: "0.0.6-junco.2")
   ],
   targets: [
     .target(
