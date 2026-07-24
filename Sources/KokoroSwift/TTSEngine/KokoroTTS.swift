@@ -162,10 +162,19 @@ public final class KokoroTTS {
   ///   - language: Target language for pronunciation
   ///   - text: Input text to synthesize
   ///   - speed: Speech speed multiplier (1.0 = normal, >1.0 = faster, <1.0 = slower)
+  ///   - predictTimestamps: Whether to mutate returned tokens with predicted timestamps.
+  ///     Defaults to `true` for source and behavior compatibility. Disable this when
+  ///     the caller only needs audio to avoid unnecessary host synchronization.
   /// - Returns: Array of audio samples as Float values
   /// - Throws: `KokoroTTSError.tooManyTokens` if text is too long,
   ///           or `G2PProcessorError` if G2P processing fails
-  public func generateAudio(voice: MLXArray, language: Language, text: String, speed: Float = 1.0) throws -> ([Float], [MToken]?) {
+  public func generateAudio(
+    voice: MLXArray,
+    language: Language,
+    text: String,
+    speed: Float = 1.0,
+    predictTimestamps: Bool = true
+  ) throws -> ([Float], [MToken]?) {
     // Update language if it has changed
     try updateLanguageIfNeeded(language)
 
@@ -217,7 +226,7 @@ public final class KokoroTTS {
     )[0]
     
     // Try to predict timestamp of each token if G2P processor returns tokens
-    if let tokenArray {
+    if predictTimestamps, let tokenArray {
       TimestampPredictor.preditTimestamps(tokens: tokenArray, predictionDuration: predictedDurations)
     }
     
@@ -269,18 +278,17 @@ public final class KokoroTTS {
     let paddedInputIds = MLXArray(paddedInputIdsArray).expandedDimensions(axes: [0])
 
     // Create input length tensor
-    let inputLengths = MLXArray(paddedInputIds.dim(-1))
-    let inputLengthMax: Int = inputLengths.max().item()
+    let inputLength = paddedInputIdsArray.count
+    let inputLengths = MLXArray(inputLength)
     
-    // Create text mask for padding positions
-    var textMask = MLXArray(0 ..< inputLengthMax)
-    textMask = textMask + 1 .> inputLengths
-    textMask = textMask.expandedDimensions(axes: [0])
+    // Each invocation contains one unpadded sequence, so every position is valid.
+    // Construct both masks directly instead of evaluating an MLX comparison on the
+    // host and converting its result back into another MLX array.
+    let textMask = MLXArray([Bool](repeating: false, count: inputLength))
+      .reshaped([1, inputLength])
     
-    // Create attention mask (1 for valid positions, 0 for padding)
-    let swiftTextMask: [Bool] = textMask.asArray(Bool.self)
-    let swiftTextMaskInt = swiftTextMask.map { !$0 ? 1 : 0 }
-    let attentionMask = MLXArray(swiftTextMaskInt).reshaped(textMask.shape)
+    let attentionMask = MLXArray([Int](repeating: 1, count: inputLength))
+      .reshaped([1, inputLength])
 
     return (paddedInputIds, attentionMask, inputLengths, textMask, inputIds)
   }
@@ -356,25 +364,40 @@ public final class KokoroTTS {
   ///   - batchSize: Size of the input batch
   /// - Returns: Alignment matrix [batchSize × totalFrames]
   private func createAlignmentTarget(durations: MLXArray, batchSize: Int) -> MLXArray {
-    // Create indices array by repeating each index according to its duration
-    let indices = MLX.concatenated(
-      durations.enumerated().map { index, duration in
-        let frameCount: Int = duration.item()
-        return MLX.repeated(MLXArray([index]), count: frameCount)
-      }
-    )
-
-    // Create one-hot encoded alignment matrix
-    let totalFrames = indices.shape[0]
-    var alignmentArray = [Float](repeating: 0.0, count: totalFrames * batchSize)
+    // A single bulk read evaluates predicted durations once. The old implementation
+    // read each duration separately, created an intermediate MLX indices array, then
+    // evaluated one indexed scalar per output frame before filling this same Swift
+    // matrix. Keeping the expansion in Swift removes those synchronization points.
+    let swiftDurations = durations.asArray(Int32.self)
+    let alignment = Self.alignmentValues(durations: swiftDurations, rowCount: batchSize)
     
-    for frame in 0 ..< totalFrames {
-      let phonemeIndex: Int = indices[frame].item()
-      alignmentArray[phonemeIndex * totalFrames + frame] = 1.0
-    }
-    
-    let alignmentTarget = MLXArray(alignmentArray).reshaped([batchSize, totalFrames])
+    let alignmentTarget = MLXArray(alignment.values).reshaped([batchSize, alignment.totalFrames])
     return alignmentTarget.expandedDimensions(axis: 0)
+  }
+
+  /// Pure-Swift one-hot construction kept internal for exact, GPU-independent tests.
+  static func alignmentValues(
+    durations: [Int32],
+    rowCount: Int
+  ) -> (values: [Float], totalFrames: Int) {
+    precondition(rowCount >= durations.count)
+    precondition(durations.allSatisfy { $0 >= 0 })
+
+    let totalFrames = durations.reduce(into: 0) { total, duration in
+      total += Int(duration)
+    }
+    var values = [Float](repeating: 0, count: rowCount * totalFrames)
+    var firstFrame = 0
+
+    for (phonemeIndex, duration) in durations.enumerated() {
+      let nextFrame = firstFrame + Int(duration)
+      for frame in firstFrame ..< nextFrame {
+        values[phonemeIndex * totalFrames + frame] = 1
+      }
+      firstFrame = nextFrame
+    }
+
+    return (values, totalFrames)
   }
   
   /// Constants used throughout the TTS engine.
