@@ -40,3 +40,25 @@ import Testing
   #expect(first.values.filter { $0 == 1 }.count == 24)
   #expect(first.values.allSatisfy { $0 == 0 || $0 == 1 })
 }
+
+@Test func durationBudgetAcceptsBoundary() throws {
+  try KokoroTTS.validateDurationBudget(totalFrames: 700, maximumFrames: 700)
+}
+
+@Test func durationBudgetRejectsFirstFrameOverBoundary() {
+  #expect(throws: KokoroTTS.KokoroTTSError.durationLimitExceeded(
+    totalFrames: 701,
+    maximumFrames: 700
+  )) {
+    try KokoroTTS.validateDurationBudget(totalFrames: 701, maximumFrames: 700)
+  }
+}
+
+@Test func durationBudgetRejectsInvalidMaximum() {
+  #expect(throws: KokoroTTS.KokoroTTSError.durationLimitExceeded(
+    totalFrames: 0,
+    maximumFrames: 0
+  )) {
+    try KokoroTTS.validateDurationBudget(totalFrames: 0, maximumFrames: 0)
+  }
+}

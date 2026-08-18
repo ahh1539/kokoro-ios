@@ -24,9 +24,12 @@ import MLXUtilsLibrary
 /// ```
 public final class KokoroTTS {
   /// Errors from the TTS side
-  public enum KokoroTTSError: Error {
+  public enum KokoroTTSError: Error, Equatable {
     /// Thrown when input text exceeds maximum token count
     case tooManyTokens
+    /// Thrown before alignment and decoder graph construction when a voice's
+    /// predicted duration would exceed the caller's memory-safe frame budget.
+    case durationLimitExceeded(totalFrames: Int, maximumFrames: Int)
   }
   
   /// BERT model for encoding phoneme sequences
@@ -165,15 +168,19 @@ public final class KokoroTTS {
   ///   - predictTimestamps: Whether to mutate returned tokens with predicted timestamps.
   ///     Defaults to `true` for source and behavior compatibility. Disable this when
   ///     the caller only needs audio to avoid unnecessary host synchronization.
+  ///   - maximumDurationFrames: Largest decoder graph to construct. Each frame is
+  ///     25 ms of output audio. Defaults to the on-device memory-safe budget.
   /// - Returns: Array of audio samples as Float values
   /// - Throws: `KokoroTTSError.tooManyTokens` if text is too long,
-  ///           or `G2PProcessorError` if G2P processing fails
+  ///           `KokoroTTSError.durationLimitExceeded` if the selected voice predicts
+  ///           an unsafe graph, or `G2PProcessorError` if G2P processing fails
   public func generateAudio(
     voice: MLXArray,
     language: Language,
     text: String,
     speed: Float = 1.0,
-    predictTimestamps: Bool = true
+    predictTimestamps: Bool = true,
+    maximumDurationFrames: Int = Constants.maxDurationFrames
   ) throws -> ([Float], [MToken]?) {
     // Update language if it has changed
     try updateLanguageIfNeeded(language)
@@ -201,10 +208,11 @@ public final class KokoroTTS {
     )
     
     // Step 5: Predict phoneme durations
-    let (predictedDurations, alignmentTarget) = predictDurations(
+    let (predictedDurations, alignmentTarget) = try predictDurations(
       features: durationFeatures,
       batchSize: paddedInputIds.shape[1],
-      speed: speed
+      speed: speed,
+      maximumDurationFrames: maximumDurationFrames
     )
     
     // Step 6: Generate aligned encodings
@@ -342,7 +350,12 @@ public final class KokoroTTS {
   ///   - batchSize: Size of the input batch
   ///   - speed: Speech speed multiplier
   /// - Returns: Predicted durations and alignment target matrix for duration expansion
-  private func predictDurations(features: MLXArray, batchSize: Int, speed: Float) -> (MLXArray, MLXArray) {
+  private func predictDurations(
+    features: MLXArray,
+    batchSize: Int,
+    speed: Float,
+    maximumDurationFrames: Int
+  ) throws -> (MLXArray, MLXArray) {
     // Pass through LSTM
     let (lstmOutput, _) = predictorLSTM(features)
     
@@ -354,7 +367,14 @@ public final class KokoroTTS {
     let predictedDurations = MLX.clip(durationSigmoid.round(), min: 1).asType(.int32)[0]
     
     // Create alignment matrix
-    return (predictedDurations, createAlignmentTarget(durations: predictedDurations, batchSize: batchSize))
+    return (
+      predictedDurations,
+      try createAlignmentTarget(
+        durations: predictedDurations,
+        batchSize: batchSize,
+        maximumDurationFrames: maximumDurationFrames
+      )
+    )
   }
   
   /// Creates an alignment target matrix from predicted durations. Maps each phoneme to multiple frames based on duration.
@@ -363,12 +383,21 @@ public final class KokoroTTS {
   ///   - durations: Predicted duration for each phoneme
   ///   - batchSize: Size of the input batch
   /// - Returns: Alignment matrix [batchSize × totalFrames]
-  private func createAlignmentTarget(durations: MLXArray, batchSize: Int) -> MLXArray {
+  private func createAlignmentTarget(
+    durations: MLXArray,
+    batchSize: Int,
+    maximumDurationFrames: Int
+  ) throws -> MLXArray {
     // A single bulk read evaluates predicted durations once. The old implementation
     // read each duration separately, created an intermediate MLX indices array, then
     // evaluated one indexed scalar per output frame before filling this same Swift
     // matrix. Keeping the expansion in Swift removes those synchronization points.
     let swiftDurations = durations.asArray(Int32.self)
+    let totalFrames = swiftDurations.reduce(into: 0) { $0 += Int($1) }
+    try Self.validateDurationBudget(
+      totalFrames: totalFrames,
+      maximumFrames: maximumDurationFrames
+    )
     let alignment = Self.alignmentValues(durations: swiftDurations, rowCount: batchSize)
     
     let alignmentTarget = MLXArray(alignment.values).reshaped([batchSize, alignment.totalFrames])
@@ -399,11 +428,25 @@ public final class KokoroTTS {
 
     return (values, totalFrames)
   }
+
+  /// Pure validation kept internal for exact, model-independent tests.
+  static func validateDurationBudget(totalFrames: Int, maximumFrames: Int) throws {
+    guard maximumFrames > 0, totalFrames <= maximumFrames else {
+      throw KokoroTTSError.durationLimitExceeded(
+        totalFrames: totalFrames,
+        maximumFrames: maximumFrames
+      )
+    }
+  }
   
   /// Constants used throughout the TTS engine.
   public struct Constants {
     /// Maximum number of tokens allowed in input
     public static let maxTokenCount = 510
+
+    /// Maximum duration expansion allowed before constructing the high-memory
+    /// prosody and decoder graph. Kokoro produces 40 duration frames per second.
+    public static let maxDurationFrames = 700
     
     /// Audio sampling rate in Hz
     public static let samplingRate = 24000
