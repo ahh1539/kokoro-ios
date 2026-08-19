@@ -9,11 +9,9 @@ import MLXNN
 ///
 /// Weight-norm and the bias reshape are input-independent, so they are computed
 /// once at init instead of on every forward (the vocoder has many of these).
+/// `eval` materializes the result so `weightG` / `weightV` can be dropped and
+/// are not kept resident next to the normalized copy.
 class ConvWeighted: Module {
-  var weightG: MLXArray
-  var weightV: MLXArray
-  var bias: MLXArray?
-
   private let normalizedWeight: MLXArray
   private let shapedBias: MLXArray?
 
@@ -39,11 +37,14 @@ class ConvWeighted: Module {
     self.outputPadding = outputPadding
     self.groups = groups
 
-    self.weightG = weightG
-    self.weightV = weightV
-    self.bias = bias
-    self.normalizedWeight = ConvWeighted.weightNorm(weightV: weightV, weightG: weightG, dim: 0)
-    self.shapedBias = bias?.reshaped([1, 1, -1])
+    // Materialize the normalized weight at init, then drop `weightG` / `weightV`
+    // so we do not keep a second resident copy for the life of KokoroTTS.
+    let normalized = ConvWeighted.weightNorm(weightV: weightV, weightG: weightG, dim: 0)
+    let biasShaped = bias?.reshaped([1, 1, -1])
+    eval(normalized)
+    if let biasShaped { eval(biasShaped) }
+    self.normalizedWeight = normalized
+    self.shapedBias = biasShaped
 
     super.init()
   }
