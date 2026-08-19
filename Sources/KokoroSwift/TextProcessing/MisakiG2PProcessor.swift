@@ -37,6 +37,12 @@ final class MisakiG2PProcessor : G2PProcessor {
     guard let misaki else { throw G2PProcessorError.processorNotInitialized }
     return misaki.phonemize(text: input)
   }
+
+  func consumeFallbackStats() -> (lookups: Int, hits: Int) {
+    guard let misaki else { return (0, 0) }
+    let stats = misaki.consumeFallbackStats()
+    return (stats.lookups, stats.hits)
+  }
 }
 
 #endif

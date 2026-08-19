@@ -61,6 +61,10 @@ public final class KokoroTTS {
   
   /// Currently active language (cached to avoid reinitializing G2P)
   private var chosenLanguage: Language = .none
+
+  /// OOV BART fallback lookups/hits from the most recent `generateAudio` call.
+  public private(set) var lastG2PFallbackLookups = 0
+  public private(set) var lastG2PFallbackHits = 0
   
   /// Initializes the Kokoro TTS engine with model weights and G2P processor.
   /// - Parameters:
@@ -258,10 +262,13 @@ public final class KokoroTTS {
   
   /// Converts input text to phonemes using the G2P processor.
   private func phonemizeText(_ text: String) throws -> (String, [MToken]?) {
-    let phonemizedOutput = try g2pProcessor?.process(input: text)
-    guard let phonemizedOutput else {
+    guard let g2pProcessor else {
       throw G2PProcessorError.processorNotInitialized
     }
+    let phonemizedOutput = try g2pProcessor.process(input: text)
+    let (lookups, hits) = g2pProcessor.consumeFallbackStats()
+    lastG2PFallbackLookups = lookups
+    lastG2PFallbackHits = hits
     return phonemizedOutput
   }
   

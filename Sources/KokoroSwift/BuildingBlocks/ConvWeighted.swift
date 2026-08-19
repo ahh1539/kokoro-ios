@@ -5,11 +5,17 @@ import Foundation
 import MLX
 import MLXNN
 
-/// Conv1d with weight normalization
+/// Conv1d with weight normalization.
+///
+/// Weight-norm and the bias reshape are input-independent, so they are computed
+/// once at init instead of on every forward (the vocoder has many of these).
 class ConvWeighted: Module {
   var weightG: MLXArray
   var weightV: MLXArray
   var bias: MLXArray?
+
+  private let normalizedWeight: MLXArray
+  private let shapedBias: MLXArray?
 
   let stride: Int
   let padding: Int
@@ -36,11 +42,13 @@ class ConvWeighted: Module {
     self.weightG = weightG
     self.weightV = weightV
     self.bias = bias
+    self.normalizedWeight = ConvWeighted.weightNorm(weightV: weightV, weightG: weightG, dim: 0)
+    self.shapedBias = bias?.reshaped([1, 1, -1])
 
     super.init()
   }
-  
-  private func computeNorm(
+
+  static func computeNorm(
     x: MLXArray,
     p: Int,
     dim: [Int]? = nil,
@@ -58,15 +66,13 @@ class ConvWeighted: Module {
     }
 
     if p == 1 {
-      // L1 norm
       return MLX.sum(MLX.abs(x), axes: dimensions, keepDims: keepdim)
     } else {
-      // L2 norm
       return MLX.sqrt(MLX.sum(x * x, axes: dimensions, keepDims: keepdim))
     }
   }
 
-  private func weightNorm(
+  static func weightNorm(
     weightV: MLXArray,
     weightG: MLXArray,
     dim: Int? = nil
@@ -91,18 +97,14 @@ class ConvWeighted: Module {
 
     let normV = computeNorm(x: weightV, p: 2, dim: axes, keepdim: true)
 
-    // Add epsilon for numerical stability
     let normalizedWeight = weightV / (normV + 1e-7)
     return normalizedWeight * weightG
   }
-  
-  public func callAsFunction(_ x: MLXArray, conv: (MLXArray, MLXArray, Int, Int, Int, Int, StreamOrDevice) -> MLXArray) -> MLXArray {
-    let weight = weightNorm(weightV: weightV, weightG: weightG, dim: 0)
-    bias = bias?.reshaped([1, 1, -1])
 
-    func applyConv(x: MLXArray, weightToUse: MLXArray) -> MLXArray {
-      let result = conv(
-        x,
+  public func callAsFunction(_ x: MLXArray, conv: (MLXArray, MLXArray, Int, Int, Int, Int, StreamOrDevice) -> MLXArray) -> MLXArray {
+    applyConv(x: x, weight: normalizedWeight, bias: shapedBias) { input, weightToUse in
+      conv(
+        input,
         weightToUse,
         self.stride,
         padding,
@@ -110,27 +112,13 @@ class ConvWeighted: Module {
         groups,
         .default
       )
-
-      if let bias = bias {
-        return result + bias
-      }
-      return result
-    }
-
-    if x.shape.last == weight.shape.last || groups > 1 {
-      return applyConv(x: x, weightToUse: weight)
-    } else {
-      return applyConv(x: x, weightToUse: weight.transposed())
     }
   }
-  
-  public func callAsFunction(_ x: MLXArray, conv: (MLXArray, MLXArray, Int, Int, Int, Int, Int, StreamOrDevice) -> MLXArray) -> MLXArray {
-    let weight = weightNorm(weightV: weightV, weightG: weightG, dim: 0)
-    bias = bias?.reshaped([1, 1, -1])
 
-    func applyConv(x: MLXArray, weightToUse: MLXArray) -> MLXArray {
-      let result = conv(
-        x,
+  public func callAsFunction(_ x: MLXArray, conv: (MLXArray, MLXArray, Int, Int, Int, Int, Int, StreamOrDevice) -> MLXArray) -> MLXArray {
+    applyConv(x: x, weight: normalizedWeight, bias: shapedBias) { input, weightToUse in
+      conv(
+        input,
         weightToUse,
         self.stride,
         padding,
@@ -139,17 +127,26 @@ class ConvWeighted: Module {
         groups,
         .default
       )
-
-      if let bias = bias {
-        return result + bias
-      }
-      return result
     }
+  }
 
+  private func applyConv(
+    x: MLXArray,
+    weight: MLXArray,
+    bias: MLXArray?,
+    conv: (MLXArray, MLXArray) -> MLXArray
+  ) -> MLXArray {
+    let weightToUse: MLXArray
     if x.shape.last == weight.shape.last || groups > 1 {
-      return applyConv(x: x, weightToUse: weight)
+      weightToUse = weight
     } else {
-      return applyConv(x: x, weightToUse: weight.transposed())
+      weightToUse = weight.transposed()
     }
+
+    let result = conv(x, weightToUse)
+    if let bias {
+      return result + bias
+    }
+    return result
   }
 }

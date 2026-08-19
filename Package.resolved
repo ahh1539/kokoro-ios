@@ -1,13 +1,13 @@
 {
-  "originHash" : "8a2e4a75110bfd1e56ca3fc413156dd03272520f3a4d948b0c1121eceb8ce616",
+  "originHash" : "7ef4fa0658845b3316c36387a1ac637b691c99f88051a7818d851bcf14904d35",
   "pins" : [
     {
       "identity" : "misakiswift",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/ahh1539/MisakiSwift",
       "state" : {
-        "revision" : "b2b71001543e5a546b6abf526b2b7602ee964a06",
-        "version" : "1.0.11"
+        "revision" : "29aa0dc5156ff8e7168e59efb8f9b055317f2b6e",
+        "version" : "1.0.12"
       }
     },
     {

@@ -17,32 +17,6 @@ func hanning(length: Int) -> MLXArray {
   return 0.5 + 0.5 * cos(n * factor)
 }
 
-// Unwrap implementation to replace np.unwrap
-func unwrap(p: MLXArray) -> MLXArray {
-  let period: Float = 2.0 * .pi
-  let discont: Float = period / 2.0
-
-  let pDiff1 = p[0..., 0 ..< p.shape[1] - 1]
-  let pDiff2 = p[0..., 1 ..< p.shape[1]]
-
-  let pDiff = pDiff2 - pDiff1
-
-  let intervalHigh: Float = period / 2.0
-  let intervalLow: Float = -intervalHigh
-
-  var pDiffMod = pDiff - intervalLow
-  pDiffMod = (((pDiffMod % period) + period) % period) + intervalLow
-
-  let ddSignArray = MLX.where(pDiff .> 0, intervalHigh, pDiffMod)
-
-  pDiffMod = MLX.where(pDiffMod .== intervalLow, ddSignArray, pDiffMod)
-
-  var phCorrect = pDiffMod - pDiff
-  phCorrect = MLX.where(abs(pDiff) .< discont, MLXArray(0.0), phCorrect)
-
-  return MLX.concatenated([p[0..., 0 ..< 1], p[0..., 1...] + phCorrect.cumsum(axis: 1)], axis: 1)
-}
-
 func mlxStft(
   x: MLXArray,
   nFft: Int = 800,
@@ -179,6 +153,8 @@ class MLXSTFT {
   let hopLength: Int
   let winLength: Int
   let window: String
+  /// Hann window is fixed for a given `winLength`; rebuild it once, not per frame.
+  private let windowArray: MLXArray
 
   var magnitude: MLXArray?
   var phase: MLXArray?
@@ -188,6 +164,10 @@ class MLXSTFT {
     self.hopLength = hopLength
     self.winLength = winLength
     self.window = window
+    guard window.lowercased() == "hann" else {
+      fatalError("Only hanning is supported for window, not \(window)")
+    }
+    self.windowArray = hanning(length: winLength + 1)[0 ..< winLength]
   }
 
   func transform(inputData: MLXArray) -> (MLXArray, MLXArray) {
@@ -206,7 +186,7 @@ class MLXSTFT {
         nFft: filterLength,
         hopLength: hopLength,
         winLength: winLength,
-        window: window,
+        window: windowArray,
         center: true,
         padMode: "reflect"
       )
@@ -230,17 +210,15 @@ class MLXSTFT {
     var reconstructed: [MLXArray] = []
 
     for batchIdx in 0 ..< magnitude.shape[0] {
-      let phaseCont = unwrap(p: phase[batchIdx])
-
-      // Combine magnitude and phase
-      let stft = magnitude[batchIdx] * MLX.exp(MLXArray(real: 0, imaginary: 1) * phaseCont)
+      // exp(i * unwrap(phase)) == exp(i * phase); skip the no-op unwrap.
+      let stft = magnitude[batchIdx] * MLX.exp(MLXArray(real: 0, imaginary: 1) * phase[batchIdx])
 
       // Inverse STFT
       let audio = mlxIstft(
         x: stft,
         hopLength: hopLength,
         winLength: winLength,
-        window: window
+        window: windowArray
       )
       reconstructed.append(audio)
     }

@@ -27,4 +27,12 @@ protocol G2PProcessor {
   /// - Returns: A phonetic string representation of the input text and optionally arrays of tokens.
   /// - Throws: `G2PProcessorError.processorNotInitialized` if `setLanguage(_:)` has not been called.
   func process(input: String) throws -> (String, [MToken]?)
+
+  /// OOV BART fallback lookups/hits for the most recent `process` call.
+  /// Default is zeros for engines that do not use the Misaki fallback.
+  func consumeFallbackStats() -> (lookups: Int, hits: Int)
+}
+
+extension G2PProcessor {
+  func consumeFallbackStats() -> (lookups: Int, hits: Int) { (0, 0) }
 }
