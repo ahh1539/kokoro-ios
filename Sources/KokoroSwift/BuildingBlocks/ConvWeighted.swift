@@ -7,13 +7,13 @@ import MLXNN
 
 /// Conv1d with weight normalization.
 ///
-/// Weight-norm and the bias reshape are input-independent, so they are computed
-/// once at init instead of on every forward (the vocoder has many of these).
-/// `eval` materializes the result so `weightG` / `weightV` can be dropped and
-/// are not kept resident next to the normalized copy.
+/// Weight-norm stays on the forward path. Hoisting it to init and retaining the
+/// normalized copy grew resident memory with no measured RTF win (Junco 1.0.19 /
+/// 1.0.20). Reverted so only `weightG` / `weightV` stay live.
 class ConvWeighted: Module {
-  private let normalizedWeight: MLXArray
-  private let shapedBias: MLXArray?
+  var weightG: MLXArray
+  var weightV: MLXArray
+  var bias: MLXArray?
 
   let stride: Int
   let padding: Int
@@ -37,19 +37,14 @@ class ConvWeighted: Module {
     self.outputPadding = outputPadding
     self.groups = groups
 
-    // Materialize the normalized weight at init, then drop `weightG` / `weightV`
-    // so we do not keep a second resident copy for the life of KokoroTTS.
-    let normalized = ConvWeighted.weightNorm(weightV: weightV, weightG: weightG, dim: 0)
-    let biasShaped = bias?.reshaped([1, 1, -1])
-    eval(normalized)
-    if let biasShaped { eval(biasShaped) }
-    self.normalizedWeight = normalized
-    self.shapedBias = biasShaped
+    self.weightG = weightG
+    self.weightV = weightV
+    self.bias = bias
 
     super.init()
   }
 
-  static func computeNorm(
+  private func computeNorm(
     x: MLXArray,
     p: Int,
     dim: [Int]? = nil,
@@ -73,7 +68,7 @@ class ConvWeighted: Module {
     }
   }
 
-  static func weightNorm(
+  private func weightNorm(
     weightV: MLXArray,
     weightG: MLXArray,
     dim: Int? = nil
@@ -103,9 +98,12 @@ class ConvWeighted: Module {
   }
 
   public func callAsFunction(_ x: MLXArray, conv: (MLXArray, MLXArray, Int, Int, Int, Int, StreamOrDevice) -> MLXArray) -> MLXArray {
-    applyConv(x: x, weight: normalizedWeight, bias: shapedBias) { input, weightToUse in
-      conv(
-        input,
+    let weight = weightNorm(weightV: weightV, weightG: weightG, dim: 0)
+    bias = bias?.reshaped([1, 1, -1])
+
+    func applyConv(x: MLXArray, weightToUse: MLXArray) -> MLXArray {
+      let result = conv(
+        x,
         weightToUse,
         self.stride,
         padding,
@@ -113,13 +111,27 @@ class ConvWeighted: Module {
         groups,
         .default
       )
+
+      if let bias = bias {
+        return result + bias
+      }
+      return result
+    }
+
+    if x.shape.last == weight.shape.last || groups > 1 {
+      return applyConv(x: x, weightToUse: weight)
+    } else {
+      return applyConv(x: x, weightToUse: weight.transposed())
     }
   }
 
   public func callAsFunction(_ x: MLXArray, conv: (MLXArray, MLXArray, Int, Int, Int, Int, Int, StreamOrDevice) -> MLXArray) -> MLXArray {
-    applyConv(x: x, weight: normalizedWeight, bias: shapedBias) { input, weightToUse in
-      conv(
-        input,
+    let weight = weightNorm(weightV: weightV, weightG: weightG, dim: 0)
+    bias = bias?.reshaped([1, 1, -1])
+
+    func applyConv(x: MLXArray, weightToUse: MLXArray) -> MLXArray {
+      let result = conv(
+        x,
         weightToUse,
         self.stride,
         padding,
@@ -128,26 +140,17 @@ class ConvWeighted: Module {
         groups,
         .default
       )
-    }
-  }
 
-  private func applyConv(
-    x: MLXArray,
-    weight: MLXArray,
-    bias: MLXArray?,
-    conv: (MLXArray, MLXArray) -> MLXArray
-  ) -> MLXArray {
-    let weightToUse: MLXArray
+      if let bias = bias {
+        return result + bias
+      }
+      return result
+    }
+
     if x.shape.last == weight.shape.last || groups > 1 {
-      weightToUse = weight
+      return applyConv(x: x, weightToUse: weight)
     } else {
-      weightToUse = weight.transposed()
+      return applyConv(x: x, weightToUse: weight.transposed())
     }
-
-    let result = conv(x, weightToUse)
-    if let bias {
-      return result + bias
-    }
-    return result
   }
 }
