@@ -5,6 +5,14 @@ import Foundation
 import MLX
 import MLXNN
 
+// Compiled once for the process. Alpha is an argument so each residual's
+// Snake scale stays correct. Shapeless is safe: this op does not inspect shapes.
+private let compiledSnake: @Sendable (MLXArray, MLXArray) -> MLXArray =
+  MLX.compile(shapeless: true) { xt, alpha in
+    let sine = MLX.sin(alpha * xt)
+    return xt + (1 / alpha) * (sine * sine)
+  }
+
 class AdaINResBlock1 {
   var convs1: [ConvWeighted] = []
   var convs2: [ConvWeighted] = []
@@ -84,14 +92,14 @@ class AdaINResBlock1 {
       let a2 = alpha2[i]
 
       var xt = n1(result, s: s)
-      xt = xt + (1 / a1) * (MLX.sin(a1 * xt).pow(2))
+      xt = compiledSnake(xt, a1)
 
       xt = MLX.swappedAxes(xt, 2, 1)
       xt = c1(xt, conv: MLX.conv1d)
       xt = MLX.swappedAxes(xt, 2, 1)
 
       xt = n2(xt, s: s)
-      xt = xt + (1 / a2) * (MLX.sin(a2 * xt).pow(2))
+      xt = compiledSnake(xt, a2)
 
       xt = MLX.swappedAxes(xt, 2, 1)
       xt = c2(xt, conv: MLX.conv1d)
