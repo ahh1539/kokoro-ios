@@ -147,10 +147,13 @@ class LSTM: Module {
       currentCell = f * currentCell + i * g
       currentHidden = o * MLX.tanh(currentCell)
 
-      // Insert at beginning to maintain original sequence order
-      allCell.insert(currentCell, at: 0)
-      allHidden.insert(currentHidden, at: 0)
+      allCell.append(currentCell)
+      allHidden.append(currentHidden)
     }
+
+    // Append+reverse is output-identical to insert-at-0 and avoids quadratic prepend.
+    allHidden.reverse()
+    allCell.reverse()
 
     return (MLX.stacked(allHidden, axis: -2), MLX.stacked(allCell, axis: -2))
   }
